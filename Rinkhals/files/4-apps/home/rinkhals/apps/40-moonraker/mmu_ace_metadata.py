@@ -37,15 +37,41 @@ def parse_gcode_file(file_path):
 
     tools_used = set()
     total_toolchanges = 0
-
-    with open(file_path, 'r') as in_file:
-        for line in in_file:
-            # Discover slicer
-            if not slicer and line.startswith(";"):
-                match = slicer_regex.match(line)
-                if match:
-                    slicer = match.group(1) or match.group(2)
+    spool_commands = []
     
+    logging.info(f"Parsing G-code file for metadata: {file_path}") 
+    with open(file_path, 'r') as in_file:  
+        for line in in_file:  
+            # Discover slicer  
+            if not slicer and line.startswith(";"):  
+                match = slicer_regex.match(line)  
+                if match:  
+                    slicer = match.group(1) or match.group(2)  
+              
+            # Extract SET_ACTIVE_SPOOL commands  
+            line_upper = line.upper().strip()  
+            if line_upper.startswith('SET_ACTIVE_SPOOL'):  
+                parts = line.split()  
+                for part in parts[1:]:  
+                    if '=' in part:  
+                        key, value = part.split('=', 1)  
+                        if key.upper() in ['ID', 'SPOOL_ID']: 
+                            clean_value = value.strip()
+
+                            # Skip dynamic placeholders (they contain '{')
+                            if '{' in clean_value:
+                                logging.info(f"Skipping dynamic placeholder: {clean_value}")
+                                continue
+ 
+                            try:
+                                spool_id = int(clean_value)
+                                spool_commands.append(spool_id)  
+                                logging.info(f"Found SET_ACTIVE_SPOOL with ID: {spool_id}")  
+
+                            except ValueError:  
+                                # This handles any other non-numeric garbage safely
+                                pass 
+ 
     if slicer in AUTHORZIED_SLICERS:
         tools_regex = re.compile(TOOL_DISCOVERY_REGEX, re.IGNORECASE)
 
@@ -61,6 +87,7 @@ def parse_gcode_file(file_path):
         "slicer": slicer,
         "tools_used": sorted(tools_used),
         "total_toolchanges": total_toolchanges,
+        "spool_commands": spool_commands,
     }
 
 def process_file(input_filename, output_filename, tools_used, total_toolchanges):
@@ -92,10 +119,30 @@ def main(config: Dict[str, Any], metadata) -> None:
                 start = time.time()
                 parse_result = parse_gcode_file(file_path)
                 slicer = parse_result["slicer"]
+                spool_commands = parse_result.get("spool_commands", [])
                 tools_used = parse_result["tools_used"]
                 total_toolchanges = parse_result["total_toolchanges"]
                 metadata.logger.info("Reading placeholders took %.2fs. Detected gcode by slicer: %s" % (time.time() - start, slicer))
                 metadata.logger.info("Detected tools: %s" % tools_used)
+
+                if spool_commands:  
+                    final_spool_id = spool_commands[-1]  # Use the last one  
+                    logging.info(f"Setting active spool to {final_spool_id} from G-code file")  
+                    import subprocess 
+                    try:  
+                         result = subprocess.run([  
+                         'curl', '-X', 'POST',  
+                         'http://localhost:7125/server/spoolman/spool_id',  
+                         '-H', 'Content-Type: application/json',  
+                         '-d', f'{{"spool_id": {final_spool_id}}}'  
+                         ], capture_output=True, text=True, timeout=10)  
+        
+                         if result.returncode == 0:  
+                             logging.info(f"Successfully set spool to {final_spool_id} via API")  
+                         else:  
+                             logging.error(f"Failed to set spool: {result.stderr}")  
+                    except Exception as e:  
+                        logging.error(f"Error calling spool API: {e}")
 
                 if tools_used is not None and len(tools_used) > 0:
                     process_file(file_path, tmp_file, tools_used, total_toolchanges)

@@ -141,6 +141,7 @@ class Kobra:
         self.patch_status_updates()
         self.patch_gcode_handler()
         self.patch_network_interfaces()
+        self.patch_spoolman_gcode() 
         self.patch_spoolman()
         self.patch_simplyprint()
         self.patch_mqtt_print()
@@ -237,7 +238,41 @@ class Kobra:
 
     def mqtt_print_file(self, file):
         logging.info(f'Trying to print {file} using MQTT...')
-
+        # Add this section to handle SET_ACTIVE_SPOOL before MQTT  
+        logging.info(f'[Kobra] Opening G-code file: {file}')
+        if os.path.isfile(f'/userdata/app/gk/gcodes/{file}'):  
+            with open(f'/userdata/app/gk/gcodes/{file}', 'r') as f:  
+                gcode_content = f.read()  
+              
+            # Find and process SET_ACTIVE_SPOOL commands
+            logging.info(f'[Kobra] Processing G-code content for SET_ACTIVE_SPOOL...')
+            for line in gcode_content.split('\n'):  
+                line = line.strip()  
+                if line.upper().startswith('SET_ACTIVE_SPOOL'):  
+                    # Parse the command  
+                    parts = line.split()  
+                    args = {}  
+                    for part in parts[1:]:  
+                        if '=' in part:  
+                            key, value = part.split('=', 1)  
+                            args[key] = value  
+                  
+            # Call your handler directly  
+            import asyncio  
+            try: 
+                logging.info(f'[Kobra] Sending {args} to SET_ACTIVE_SPOOL handler...') 
+                # Get the handler you registered  
+                handler = self.gcode_handlers.get('SET_ACTIVE_SPOOL')  
+                if handler:  
+                # Create a dummy delegate function  
+                    async def dummy_delegate():  
+                        return None  
+                        # Call the handler  
+                    asyncio.run(handler(args, dummy_delegate))  
+                    logging.info(f'[Kobra] Processed SET_ACTIVE_SPOOL from file: {args}')  
+            except Exception as e:  
+                logging.error(f'[Kobra] Error processing SET_ACTIVE_SPOOL: {e}')  
+        
         auto_leveling = self.get_app_property('40-moonraker', 'mqtt_print_auto_leveling').lower() == 'true'
         vibration_compensation = self.get_app_property('40-moonraker', 'mqtt_print_vibration_compensation').lower() == 'true'
         flow_calibration = self.get_app_property('40-moonraker', 'mqtt_print_flow_calibration').lower() == 'true'
@@ -485,6 +520,73 @@ class Kobra:
         logging.debug(f'  Before: {Machine._parse_network_interfaces}')
         setattr(Machine, '_parse_network_interfaces', _parse_network_interfaces)
         logging.debug(f'  After: {Machine._parse_network_interfaces}')
+    
+    def patch_spoolman_gcode(self):  
+        """Register handler for SET_ACTIVE_SPOOL and CLEAR_ACTIVE_SPOOL G-code commands"""  
+      
+        async def handle_clear_active_spool(args: dict, delegate_run_gcode):  
+            logging.info(f'[Kobra] CLEAR_ACTIVE_SPOOL received with args: {args}')  
+          
+            try:  
+                # Get SpoolManager component  
+                from .spoolman import SpoolManager  
+                spoolman = self.server.lookup_component("spoolman")  
+              
+                # Call set_active_spool method with spool_id=None to clear the active spool  
+                await spoolman.set_active_spool(spool_id=None)  
+                logging.info('[Kobra] Successfully cleared active spool')  
+              
+                # Return None to intercept the command (don't pass to GoKlipper)  
+                return None  
+              
+            except Exception as e:  
+                logging.error(f'[Kobra] Failed to clear active spool: {e}')  
+                return await delegate_run_gcode()  
+      
+        async def handle_set_active_spool(args: dict, delegate_run_gcode):  
+            logging.info(f'[Kobra] SET_ACTIVE_SPOOL received with args: {args}')  
+          
+            # Extract spool ID from parameters (check both ID and SPOOL_ID)  
+            spool_id = None  
+            if "ID" in args:  
+                spool_id = args["ID"]  
+            elif "SPOOL_ID" in args:  
+                spool_id = args["SPOOL_ID"]  
+          
+            if spool_id is None:  
+                logging.warning('[Kobra] No spool ID found in SET_ACTIVE_SPOOL command')  
+                return await delegate_run_gcode()  
+          
+            try:  
+                # Convert to integer  
+                spool_id_int = int(spool_id)  
+                logging.info(f'[Kobra] Setting active spool to ID: {spool_id_int}')  
+              
+                # Get SpoolManager component  
+                from .spoolman import SpoolManager  
+                spoolman = self.server.lookup_component("spoolman")  
+              
+                # Call set_active_spool method  
+                await spoolman.set_active_spool(spool_id=spool_id_int)  
+                logging.info(f'[Kobra] Successfully set active spool to {spool_id_int}')  
+              
+                # Return None to intercept the command (don't pass to GoKlipper)  
+                return None  
+              
+            except ValueError as e:  
+                logging.error(f'[Kobra] Invalid spool ID "{spool_id}": {e}')  
+                return await delegate_run_gcode()  
+            except Exception as e:  
+                logging.error(f'[Kobra] Failed to set active spool: {e}')  
+                return await delegate_run_gcode()  
+      
+        # Register SET_ACTIVE_SPOOL in gcode handlers  
+        self.register_gcode_handler('SET_ACTIVE_SPOOL', handle_set_active_spool)  
+    
+        # Register CLEAR_ACTIVE_SPOOL in gcode handlers 
+        self.register_gcode_handler('CLEAR_ACTIVE_SPOOL', handle_clear_active_spool)
+   
+        logging.info('> Spoolman G-code handlers registered') 
 
     def patch_spoolman(self):
         from .spoolman import SpoolManager
@@ -532,7 +634,8 @@ class Kobra:
         async def handle_gcode(me, script, delegate_run_gcode: Callable[[], Coroutine]):
             parts = [s.strip() for s in shlex.split(script.strip()) if s.strip()]
             logging.debug(f"hook on gcode received: {json.dumps(parts)}")
-
+            #logging to see G-code ommands 
+            logging.info(f"[Kobra DEBUG] Processing G-code: {script}")  
             # Split multi-command lines (e.g., "CMD1 ARG1=X CMD2 ARG2=Y")
             # Find indices where a part is a registered handler (indicates new command)
             handler_indices = [0]  # First part is always a command
@@ -635,7 +738,11 @@ class Kobra:
                     self.mqtt_print_file(filename)
                     return None
             
-            logging.info(f'[Kobra] Not MQTT print file: {filename}')
+            if filename:
+                logging.info(f'[Kobra] Not MQTT print file: {filename}')
+            else:
+                logging.info(f'[Kobra] No filename provided for not MQTT print')
+
             return await delegate_run_gcode()
 
         logging.info('> Send prints to MQTT...')

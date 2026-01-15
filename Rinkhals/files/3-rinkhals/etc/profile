@@ -1,0 +1,12 @@
+if [ -f /useremain/rinkhals/.current/tools.sh ]; then
+    . /useremain/rinkhals/.current/tools.sh
+fi
+
+. $ORIGINAL_ROOT/etc/profile
+
+for i in /etc/profile.d/*.sh ; do
+    if [ -r "$i" ]; then
+        . $i
+    fi
+    unset i
+done

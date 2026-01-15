@@ -1,0 +1,13 @@
+{
+    "$version": "1",
+
+    "name": "Mainsail",
+    "description": "Lightweight, responsive web user interface for Klipper. Uses port 4409.",
+    "version": "2.14.0",
+
+    "requirements":
+    {
+        "memory": 1,
+        "cpu": 4
+    }
+}

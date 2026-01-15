@@ -1,2 +1,2 @@
 # rinkhals-Spoolman-Orca-tweaks
-Code updates to get Orca to switch spools updates in moonraker. the version of Klkipper-Go I have errors on remote_cmd G-codes. These tweaks  leverage the MU
+Code updates to get Orca filament presets to spool in moonraker. The version of Klkipper-Go I have errors on remote_cmd G-codes. These tweaks leverage the MMU Gcode Parser to read the Gcodes sent in filament Gcode Start to update Moonraker via curl API call with the Spool_id for Spoolman integration. 

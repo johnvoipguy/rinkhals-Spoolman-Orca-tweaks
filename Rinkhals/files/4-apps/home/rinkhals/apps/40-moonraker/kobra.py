@@ -635,11 +635,7 @@ class Kobra:
                     self.mqtt_print_file(filename)
                     return None
             
-            if filename:
-                logging.info(f'[Kobra] Not MQTT print file: {filename}')
-            else:
-                logging.info(f'[Kobra] No filename provided for not MQTT print')
-
+            logging.info(f'[Kobra] Not MQTT print file: {filename}')
             return await delegate_run_gcode()
 
         logging.info('> Send prints to MQTT...')
